@@ -11,13 +11,8 @@ from app.models.models import (
 )
 
 
-def seed_if_empty(db: Session, backfill: bool = False) -> None:
-    # 仅在旧库刚补 oven_type 列时按标签一次性回填，之后尊重用户在炉位页的修改
-    if backfill:
-        for oven in db.scalars(select(Oven)).all():
-            if "石板" in oven.label and oven.oven_type != OVEN_TYPE_STONE:
-                oven.oven_type = OVEN_TYPE_STONE
-
+def seed_if_empty(db: Session) -> None:
+    # 炉型只认 oven_type 字段，不从标签/备注文字推断
     if db.scalar(select(Product.id).limit(1)):
         # 旧库补一个只要石板的产品，便于演示炉型不符拦截
         has_stone = db.scalar(

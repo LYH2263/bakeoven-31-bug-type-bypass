@@ -21,7 +21,7 @@ def get_db():
 def ensure_schema() -> set[str]:
     """轻量迁移：为旧库补 oven_type 列（无 Alembic 环境）。
 
-    返回本次刚补过列的表名，供一次性数据回填使用。
+    返回本次刚补过列的表名。新列一律取默认值，不从标签/备注文字回填。
     """
     migrated: set[str] = set()
     inspector = inspect(engine)
