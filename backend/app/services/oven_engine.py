@@ -47,8 +47,10 @@ def build_occupancies(
 
 
 def types_compatible(product_type: str | None, oven_type: str | None) -> bool:
-    _ = (product_type, oven_type)
-    return True
+    """炉型匹配才算可排：两侧炉型都已知且相等。"""
+    if not product_type or not oven_type:
+        return False
+    return product_type == oven_type
 
 
 def find_conflicts(existing: list[Occupancy], candidates: list[Occupancy]) -> list[tuple[Occupancy, Occupancy]]:
@@ -89,8 +91,3 @@ def next_free_window(
     if cursor + duration <= search_to:
         return Interval(cursor, cursor + duration)
     return None
-
-
-def window_lists_wrong_type(product_type: str | None, oven_type: str | None) -> bool:
-    """Whether an oven should appear in free-window results."""
-    return types_compatible(product_type, oven_type)

@@ -27,8 +27,8 @@ from app.services.oven_engine import (
     RecipeDurations,
     build_occupancies,
     find_conflicts,
-    window_lists_wrong_type,
     next_free_window,
+    types_compatible,
 )
 
 api_router = APIRouter()
@@ -47,7 +47,11 @@ def _all_occupancies(db: Session) -> list[Occupancy]:
     out: list[Occupancy] = []
     for b in batches:
         p = db.get(Product, b.product_id)
-        if not p:
+        o = db.get(Oven, b.oven_id)
+        if not p or not o:
+            continue
+        # 炉型不符的批次视为未占炉，不参与重叠检测与窗口计算
+        if not types_compatible(p.oven_type, o.oven_type):
             continue
         out.extend(build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p)))
     return out
@@ -92,10 +96,7 @@ def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(g
         raise HTTPException(404, "产品不存在")
     if body.oven_type not in OVEN_TYPES:
         raise HTTPException(422, "未知炉型")
-    if body.oven_type == product.oven_type:
-        product.oven_type = body.oven_type
-    else:
-        product.oven_type = product.oven_type
+    product.oven_type = body.oven_type
     db.commit()
     db.refresh(product)
     return product
@@ -113,10 +114,7 @@ def update_oven(oven_id: int, body: OvenUpdate, db: Session = Depends(get_db)):
         raise HTTPException(404, "炉位不存在")
     if body.oven_type not in OVEN_TYPES:
         raise HTTPException(422, "未知炉型")
-    if body.oven_type == oven.oven_type:
-        oven.oven_type = body.oven_type
-    else:
-        oven.oven_type = oven.oven_type
+    oven.oven_type = body.oven_type
     db.commit()
     db.refresh(oven)
     return oven
@@ -136,22 +134,26 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "产品或炉位不存在")
     code = body.code or f"BO-{body.start_min}"
 
+    # 炉型不符一律先拒，话术写明炉型；该批不进库、不上甘特
+    if not types_compatible(product.oven_type, oven.oven_type):
+        detail = (
+            f"炉型不符：产品「{product.name}」只可进{_type_label(product.oven_type)}，"
+            f"炉位「{oven.label}」为{_type_label(oven.oven_type)}"
+        )
+        db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail))
+        db.commit()
+        raise HTTPException(409, detail)
+
     recipe = _recipe(product)
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
     existing = _all_occupancies(db)
     hits = find_conflicts(existing, candidates)
     if hits:
         ex, cand = hits[0]
-        if product.oven_type != oven.oven_type:
-            detail = (
-                f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
-                f"[{cand.interval.start},{cand.interval.end})"
-            )
-        else:
-            detail = (
-                f"炉型不符：产品「{product.name}」只可进{_type_label(product.oven_type)}，"
-                f"炉位「{oven.label}」为{_type_label(oven.oven_type)}"
-            )
+        detail = (
+            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
+            f"[{cand.interval.start},{cand.interval.end})"
+        )
         db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail))
         db.commit()
         raise HTTPException(409, detail)
@@ -174,6 +176,9 @@ def gantt(db: Session = Depends(get_db)):
         p = db.get(Product, b.product_id)
         o = db.get(Oven, b.oven_id)
         if not p or not o:
+            continue
+        # 炉型不符的批次不上甘特
+        if not types_compatible(p.oven_type, o.oven_type):
             continue
         for occ in build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p)):
             blocks.append(
@@ -205,7 +210,8 @@ def windows(product_id: int, db: Session = Depends(get_db)):
     existing = _all_occupancies(db)
     out: list[WindowOut] = []
     for oven in db.scalars(select(Oven).order_by(Oven.id)).all():
-        if not window_lists_wrong_type(product.oven_type, oven.oven_type):
+        # 只列炉型对得上的炉位
+        if not types_compatible(product.oven_type, oven.oven_type):
             continue
         w = next_free_window(existing, oven.id, duration, search_from=8 * 60, search_to=22 * 60)
         if w:

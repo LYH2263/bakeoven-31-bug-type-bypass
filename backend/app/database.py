@@ -18,12 +18,12 @@ def get_db():
         db.close()
 
 
-def ensure_schema() -> set[str]:
+def ensure_schema() -> None:
     """轻量迁移：为旧库补 oven_type 列（无 Alembic 环境）。
 
-    返回本次刚补过列的表名，供一次性数据回填使用。
+    只补列、不按标签/备注猜测炉型；旧数据一律落到默认盘炉，
+    由用户在炉位页改正后持久保存。
     """
-    migrated: set[str] = set()
     inspector = inspect(engine)
     with engine.begin() as conn:
         for table in ("products", "ovens"):
@@ -37,5 +37,3 @@ def ensure_schema() -> set[str]:
                         "VARCHAR(10) DEFAULT 'tray' NOT NULL"
                     )
                 )
-                migrated.add(table)
-    return migrated
